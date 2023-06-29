@@ -11,8 +11,11 @@ matplotlib = "*"
 dm-haiku = "*"
 numpyro = "*"
 typing-extensions = "*"
+jupyter = "*"
+seaborn = "*"
 
 [dev-packages]
+black = "*"
 
 [requires]
 python_version = "3.9"

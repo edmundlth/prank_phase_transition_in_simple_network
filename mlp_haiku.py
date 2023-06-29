@@ -57,7 +57,7 @@ def build_forward_fn(
     activation_fn,
     initialisation_mean=0.0,
     initialisation_std=1.0,
-    with_bias=False,
+    with_bias=True,
 ):
     """
     Construct a Haiku transformed forward function for an MLP network

@@ -1,14 +1,21 @@
-import argparse
-
 import jax
 import jax.numpy as jnp
 import jax.tree_util as jtree
-import scipy
-import functools
 
 import haiku as hk
 import numpyro
+
 import matplotlib.pyplot as plt
+import matplotlib.gridspec as gridspec
+
+import seaborn as sns
+import scipy
+import numpy as np
+
+import functools
+import os
+import argparse
+import json
 
 from mlp_haiku import (
     build_forward_fn,
@@ -17,21 +24,63 @@ from mlp_haiku import (
     generate_output_data,
     build_model,
     run_mcmc,
-    MCMCConfig
+    MCMCConfig,
 )
+from approx_prank import bound
+
+
 import logging
+
 logger = logging.getLogger("__main__")  # TODO: better config
 
 ACTIVATION_FUNC_SWITCH = {
-    "tanh": jax.nn.tanh, 
-    "id": lambda x: x, 
-    "relu": jax.nn.relu, 
-    "gelu": jax.nn.gelu, 
-    "swish": jax.nn.swish, 
+    "tanh": jax.nn.tanh,
+    "id": lambda x: x,
+    "relu": jax.nn.relu,
+    "gelu": jax.nn.gelu,
+    "swish": jax.nn.swish,
 }
 
-def main(args):
 
+def to_freq(array):
+    tally = {}
+    for elem in array:
+        if elem not in tally:
+            tally[elem] = 1
+        else:
+            tally[elem] += 1
+    length = len(array)
+    return {elem: count / length for elem, count in tally.items()}
+
+
+def prior_prank_freq(h, prior_std=10.0, eps=0.01, num_samples=1000):
+    prank_rec = []
+    for i in range(num_samples):
+        param = dict(
+            a=np.random.randn(h) * prior_std,
+            b=np.random.randn(h) * prior_std,
+            c=np.random.randn(h) * prior_std,
+            d=np.random.randn(1) * prior_std,
+        )
+        prank_rec.append(bound(eps, param))
+    return to_freq(prank_rec)
+
+
+def bar_plot(tally_dict, ax):
+    keys = sorted(tally_dict.keys())
+    sns.barplot(x=keys, y=[tally_dict[key] for key in keys], ax=ax)
+    return
+
+def param_tree_to_dict(param_tree):
+    return {
+        "a": jnp.squeeze(param_tree['mlp/~/linear_1']['w']), 
+        "b": jnp.squeeze(param_tree['mlp/~/linear_0']['w']), 
+        "c": jnp.squeeze(param_tree['mlp/~/linear_0']['b']), 
+        "d": jnp.squeeze(param_tree['mlp/~/linear_1']['b'])
+    }
+
+
+def main(args):
     rngseed = args.rngseed
     rngkeyseq = hk.PRNGSequence(jax.random.PRNGKey(rngseed))
     if args.layer_sizes is None:
@@ -42,6 +91,7 @@ def main(args):
         layer_sizes = args.layer_sizes
 
     input_dim = args.input_dim
+    XMIN, XMAX = args.x_window
 
     activation_fn = ACTIVATION_FUNC_SWITCH[args.activation_fn_name.lower()]
     forward = build_forward_fn(
@@ -51,16 +101,19 @@ def main(args):
         initialisation_std=args.prior_std,
     )
     forward = hk.transform(forward)
-    log_likelihood_fn = functools.partial(
-        build_log_likelihood_fn, forward.apply, sigma=args.sigma_obs
-    )
+    # log_likelihood_fn = functools.partial(
+    #     build_log_likelihood_fn, forward.apply, sigma=args.sigma_obs
+    # )
 
     X = generate_input_data(
-        args.num_training_data, input_dim=input_dim, rng_key=next(rngkeyseq)
+        args.num_training_data,
+        input_dim=input_dim,
+        rng_key=next(rngkeyseq),
+        xmin=XMIN,
+        xmax=XMAX,
     )
     init_param = forward.init(next(rngkeyseq), X)
     init_param_flat, treedef = jtree.tree_flatten(init_param)
-    # param_shapes = [p.shape for p in init_param_flat]
     if true_param_array is not None:
         true_param = treedef.unflatten(true_param_array)
     else:
@@ -69,7 +122,9 @@ def main(args):
         forward, true_param, X, next(rngkeyseq), sigma=args.sigma_obs
     )
     param_center = true_param
-
+    # print(json.dumps(jtree.tree_map(lambda x: x.tolist(), true_param), indent=2))
+    print(param_tree_to_dict(true_param))
+    # print([elem.tolist() for elem in jtree.tree_leaves(true_param)])
     # param_prior_sampler = functools.partial(
     #     const_factorised_normal_prior, param_shapes, treedef, args.prior_mean, args.prior_std
     # )
@@ -84,37 +139,120 @@ def main(args):
     mcmc_config = MCMCConfig(
         args.num_posterior_samples, args.num_warmup, args.num_chains, args.thinning
     )
-    
 
     mcmc = run_mcmc(
-        model, 
-        [X, Y], 
-        next(rngkeyseq), 
-        mcmc_config=mcmc_config, 
-        init_params=None, 
-        itemp=1.0, 
-        progress_bar=(not args.quiet)
+        model,
+        [X, Y],
+        next(rngkeyseq),
+        mcmc_config=mcmc_config,
+        init_params=None,
+        itemp=1.0,
+        progress_bar=(not args.quiet),
+    )
+    posterior_samples = mcmc.get_samples()
+    num_mcmc_samples = len(posterior_samples[list(posterior_samples.keys())[0]])
+
+    input_dim = args.input_dim
+    num_hidden_nodes = args.layer_sizes[0]
+    output_dim = args.layer_sizes[-1]
+    key_mappings = {"0": "c", "1": "b", "2": "d", "3": "a"}
+    posterior_samples = {
+        key_mappings[key]: jnp.squeeze(val) for key, val in posterior_samples.items()
+    }
+    prank_rec = []
+    for i in range(num_mcmc_samples):
+        param = {key: val[i] for key, val in posterior_samples.items()}
+        prank = bound(0.1, param)
+        prank_rec.append(prank)
+
+        
+    fig = plt.figure(constrained_layout=True, figsize=(10, 5))
+
+    # Define the grid
+    gs = gridspec.GridSpec(4, 4, figure=fig)
+
+    ax = fig.add_subplot(gs[:2, :2])
+    prank_freqs = to_freq(prank_rec)
+    print(prank_freqs)
+    bar_plot(prank_freqs, ax=ax)
+    ax.set_xlabel("p-rank")
+    ax.set_title("posterior samples")
+
+    ax = fig.add_subplot(gs[:2, 2:])
+    prior_prank_freq_dict = prior_prank_freq(
+        h=num_hidden_nodes,
+        prior_std=args.prior_std,
+        eps=args.prank_eps,
+        num_samples=10000,
+    )
+    bar_plot(prior_prank_freq_dict, ax=ax)
+    ax.set_xlabel("p-rank")
+    ax.set_title("prior samples")
+
+    # plot true function and data.
+    ax = fig.add_subplot(gs[2:, 1:3])
+    x = np.linspace(XMIN, XMAX).reshape(-1, 1)
+    ax.plot(x, forward.apply(true_param, None, x), "r--")
+    ax.plot(X, Y, "kx")
+    true_prank = bound(args.prank_eps, param_tree_to_dict(true_param))
+    ax.set_title(f"prank={true_prank}")
+
+    fig.suptitle(
+        f"p-rank histogram: "
+        f"$n=${args.num_training_data}, "
+        f"prior $\sigma$={args.prior_std}, "
+        f"obs $\sigma=${args.sigma_obs}, "
+        f"$\epsilon=${args.prank_eps}, "
+        f"layers={[args.input_dim] + args.layer_sizes}, "
+        f"num_mcmc={num_mcmc_samples} "
     )
 
-    posterior_samples = mcmc.get_samples()
-    print(posterior_samples.keys())
-    print(posterior_samples['0'])
+    if args.output_dir is not None:
+        os.makedirs(args.output_dir, exist_ok=True)
+        filename = f"prankmcmc_n{args.num_training_data}_sigmap{args.prior_std}_sigmaobs{args.sigma_obs}_h{num_hidden_nodes}.png"
+        filepath = os.path.join(args.output_dir, filename)
+        fig.savefig(filepath, bbox_inches="tight")
+
+    if args.show_plot:
+        plt.show()
     return
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="RLCT estimation of MLP models.")
+    parser = argparse.ArgumentParser(
+        description="p-rank analysis of MCMC samples of 1 hidden layer tanh model."
+    )
+    parser.add_argument(
+        "--output_dir",
+        default=None,
+        type=str,
+        help="a directory for storing output files.",
+    )
     parser.add_argument("--num_posterior_samples", nargs="?", default=1000, type=int)
     parser.add_argument("--thinning", nargs="?", default=4, type=int)
     parser.add_argument("--num_warmup", nargs="?", default=500, type=int)
     parser.add_argument("--num_chains", nargs="?", default=4, type=int)
     parser.add_argument("--sigma_obs", nargs="?", default=1.0, type=float)
-    parser.add_argument("--prior_std", nargs="?", default=1.0, type=float)
+    parser.add_argument("--prior_std", nargs="?", default=10.0, type=float)
     parser.add_argument("--prior_mean", nargs="?", default=0.0, type=float)
-    
-    parser.add_argument("--num_training_data", nargs="?", default=1032, type=int)
-    parser.add_argument("--a0", nargs="+", default=[0.5], type=float)
-    parser.add_argument("--b0", nargs="+", default=[0.9], type=float)
+
+    parser.add_argument("--num_training_data", nargs="?", default=132, type=int)
+    # parser.add_argument("--a0", nargs="+", default=None, type=float)
+    # parser.add_argument("--b0", nargs="+", default=None, type=float)
+    parser.add_argument(
+        "--prank_eps",
+        nargs="?",
+        default=0.01,
+        type=float,
+        help="Epsilon to be used in the p-rank algorithm",
+    )
+    parser.add_argument(
+        "--x_window",
+        nargs="+",
+        type=int,
+        default=[-20, 20],
+        help="xmin and xmax",
+    )
     parser.add_argument(
         "--input_dim",
         nargs="?",
@@ -125,22 +263,20 @@ if __name__ == "__main__":
     parser.add_argument(
         "--layer_sizes",
         nargs="+",
-        default=None,
+        default=[5, 1],
         type=int,
         help="A optional list of positive integers specifying MLP layers sizes from the first non-input layer up to and including the output layer. If specified, --a0 and --b0 are ignored. ",
     )
-    
+
     parser.add_argument("--activation_fn_name", nargs="?", default="tanh", type=str)
     parser.add_argument("--device", default="cpu", type=str, help='use "cpu" or "gpu".')
-    parser.add_argument(
-        "--output_dir",
-        default=None,
-        type=str,
-        help="a directory for storing output files.",
-    )
+
     parser.add_argument("--plot_posterior_samples", action="store_true", default=False)
     parser.add_argument(
         "--quiet", action="store_true", default=False, help="Lower verbosity level."
+    )
+    parser.add_argument(
+        "--show_plot", action="store_true", default=False, help="plt.show() if true."
     )
     parser.add_argument("--rngseed", nargs="?", default=42, type=int)
 
