@@ -37,7 +37,7 @@ def canonicalize(param_dict):
     zero_indices = np.nonzero(b_sgn == 0)
     zero_units_mask[zero_indices] = True
 
-    d = param_dict['b']
+    d = param_dict['d']
     d += np.sum(np.tanh(c_param[zero_indices]) * a_param[zero_indices])
     
     # merge with same bi , bi, sum the ai's 
@@ -46,6 +46,7 @@ def canonicalize(param_dict):
     a_param = a_param[sorted_i]
     b_param = b_param[sorted_i]
     c_param = c_param[sorted_i]
+    zero_units_mask = zero_units_mask[sorted_i]
 
     i = 0
     while i < num_units:
@@ -55,7 +56,7 @@ def canonicalize(param_dict):
             continue
 
         j = i
-        while (j < num_units) and (b_param[j] == b_param[j+1]) and (c_param[j] == c_param[j+1]):            
+        while (j+1 < num_units) and (b_param[j] == b_param[j+1]) and (c_param[j] == c_param[j+1]):
             j += 1
 
         if i == j:
@@ -77,7 +78,7 @@ def canonicalize(param_dict):
         zero_units_mask[zero_indices] = True
 
         i = j + 1
-
+    
     # eliminate units with zero a_i 
     zero_indices = np.nonzero(a_param == 0) 
     zero_units_mask[zero_indices] = True
@@ -91,3 +92,130 @@ def canonicalize(param_dict):
         'd': d
     }
  
+if __name__ == '__main__':
+
+    ## TESTING PERMUTATIONS AND NEGATIONS on an irreducible parameter
+    def permute(permutation, w):
+        return {
+            'a': w['a'][permutation],
+            'b': w['b'][permutation],
+            'c': w['c'][permutation],
+            'd': w['d'],
+        }
+    def negate(sign_vector, w):
+        return {
+            'a': w['a'] * sign_vector,
+            'b': w['b'] * sign_vector,
+            'c': w['c'] * sign_vector,
+            'd': w['d'],
+        }
+    h = 5
+    w = {
+            'a': np.array([1,2,3,4,5]),
+            'b': np.array([1,2,3,4,5]),
+            'c': np.array([1,2,3,4,5]),
+            'd': 0.0,
+        }
+    permutations = [
+        np.array([0,1,3,2,4]),
+        np.array([1,2,3,4,0]),
+        np.array([4,3,2,1,0]),
+        np.array([0,3,2,1,4]),
+        np.array([0,2,1,4,3]),
+    ]
+    sign_vectors = [
+        np.array([-1,-1,-1,-1,-1]),
+        np.array([-1, 1, 1,-1, 1]),
+        np.array([ 1, 1,-1, 1,-1]),
+        np.array([-1, 1, 1,-1, 1]),
+        np.array([ 1,-1,-1, 1,-1]),
+    ]
+    def equal(u, w):
+        a = np.all(u['a'] == w['a'])
+        b = np.all(u['b'] == w['b'])
+        c = np.all(u['c'] == w['c'])
+        d = u['d'] == w['d']
+        return (a and b and c and d)
+
+    for p in permutations:
+        for s in sign_vectors:
+            w1 = negate(s, permute(p, w))
+            u = canonicalize(w1)
+            print(equal(u, w))
+
+    ## TESTING REDUCIBILITY
+
+    ws = [
+        {
+            'a': np.array([1,2,0]),
+            'b': np.array([1,2,0]),
+            'c': np.array([1,2,0]),
+            'd': 0.0,
+        },
+        {
+            'a': np.array([1,2,0]),
+            'b': np.array([1,2,1]),
+            'c': np.array([1,2,0]),
+            'd': 0.0,
+        },
+        {
+            'a': np.array([1,2,3]),
+            'b': np.array([1,2,0]),
+            'c': np.array([1,2,0]),
+            'd': 0.0,
+        },
+        {
+            'a': np.array([1,1,1]),
+            'b': np.array([1,2,2]),
+            'c': np.array([1,2,2]),
+            'd': 0.0,
+        },
+        {
+            'a': np.array([1,-1,1]),
+            'b': np.array([1,-2,2]),
+            'c': np.array([1,-2,2]),
+            'd': 0.0,
+        },
+        {
+            'a': np.array([1,1,1]),
+            'b': np.array([2,1,2]),
+            'c': np.array([2,1,2]),
+            'd': 0.0,
+        },
+        {
+            'a': np.array([-1,1,1]),
+            'b': np.array([-2,2,1]),
+            'c': np.array([-2,2,1]),
+            'd': 0.0,
+        },
+    ]
+    w0 = canonicalize(ws[0])
+    for w in ws[1:]:
+        print(equal(w0, canonicalize(w)))
+
+    ## TESTING REDUCIBILITY
+
+    ws = [
+        {
+            'a': np.array([1,2,3,0,0,0]),
+            'b': np.array([1,2,3,0,0,0]),
+            'c': np.array([1,2,3,0,0,0]),
+            'd': 0.0,
+        },
+        {
+            'a': np.array([1, 2, 3, 1,-1, 0]),
+            'b': np.array([1, 2, 3, 0, 0, 0]),
+            'c': np.array([1, 2, 3,-4,+4, 0]),
+            'd': 0.0,
+        },
+        {
+            'a': np.array([0, 0,-1, 2, 3,+2]),
+            'b': np.array([1, 2, 1, 2, 3, 1]),
+            'c': np.array([1, 2, 1, 2, 3, 1]),
+            'd': 0.0,
+        },
+    ]
+    w0 = canonicalize(ws[0])
+    for w in ws[1:]:
+        print(equal(w0, canonicalize(w)))
+

@@ -78,19 +78,26 @@ def bound(epsilon, w):
     alphas = ((sgn * a)[I] * Pi).sum(axis=-1)
 
     # return len([j for j in range(len(Pi)) if abs(alphas[j]) > epsilon * len(Pi[j])])
-    return np.sum(np.abs(alphas) > Pi.sum(axis=1) * epsilon)
+    return np.sum(np.abs(alphas) > Pi.sum(axis=-1) * epsilon)
 
 
 
+if __name__ == "__main__":
+    # w = {
+    #     'a': [1.1, 0.9, 0.2, 1.3, 1],
+    #     'b': [1.1, 1.2, 0.6, 1.3, 1],
+    #     'c': [0, 0, 0, 0, 0],
+    #     'd': 0,
+    # }
 
-w = {
-  'a': [1.1, 0.9, 0.2, 1.3, 1],
-  'b': [1.1, 1.2, 0.6, 1.3, 1],
-  'c': [0, 0, 0, 0, 0],
-  'd': 0,
-}
+    w = {
+        'a': [-0.8704732, -0.09269352, 0.3384626], 
+        'b': [-0.952935, -0.32022476,  0.9650079], 
+        'c': [-0.4964598,  1.8577402, -1.4160455],
+        'd': -1.2973489
+    }
 
-print(bound(1, w), 1)
-print(bound(0.1, w), 4)
+    print(bound(1, w), 1)
+    print(bound(0.1, w), 4)
 
 
