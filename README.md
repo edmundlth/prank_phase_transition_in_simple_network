@@ -33,5 +33,7 @@ usage: mcmc.py [-h] [--output_dir OUTPUT_DIR]
   - [ ] Plot changes in p-rank frequency in `n`. 
   - [ ] Run experiments with true network with smaller rank.
   - [ ] Run experiments with true network with larger rank.
+  - [ ] Run SGD and track p-rank over time. 
+  - [ ] Run ensemble of SGD and plot p-rank frequencies. 
   
 

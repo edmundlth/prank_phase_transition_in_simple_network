@@ -9,7 +9,6 @@ import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 
 import seaborn as sns
-import scipy
 import numpy as np
 
 import functools
@@ -25,60 +24,20 @@ from mlp_haiku import (
     build_model,
     run_mcmc,
     MCMCConfig,
+    ACTIVATION_FUNC_SWITCH
 )
 from approx_prank import bound
+from utils import (
+    prior_prank_freq, 
+    bar_plot, 
+    param_tree_to_dict, 
+    to_freq
+)
 
 
 import logging
 
 logger = logging.getLogger("__main__")  # TODO: better config
-
-ACTIVATION_FUNC_SWITCH = {
-    "tanh": jax.nn.tanh,
-    "id": lambda x: x,
-    "relu": jax.nn.relu,
-    "gelu": jax.nn.gelu,
-    "swish": jax.nn.swish,
-}
-
-
-def to_freq(array):
-    tally = {}
-    for elem in array:
-        if elem not in tally:
-            tally[elem] = 1
-        else:
-            tally[elem] += 1
-    length = len(array)
-    return {elem: count / length for elem, count in tally.items()}
-
-
-def prior_prank_freq(h, prior_std=10.0, eps=0.01, num_samples=1000):
-    prank_rec = []
-    for i in range(num_samples):
-        param = dict(
-            a=np.random.randn(h) * prior_std,
-            b=np.random.randn(h) * prior_std,
-            c=np.random.randn(h) * prior_std,
-            d=np.random.randn(1) * prior_std,
-        )
-        prank_rec.append(bound(eps, param))
-    return to_freq(prank_rec)
-
-
-def bar_plot(tally_dict, ax):
-    keys = sorted(tally_dict.keys())
-    sns.barplot(x=keys, y=[tally_dict[key] for key in keys], ax=ax)
-    return
-
-def param_tree_to_dict(param_tree):
-    return {
-        "a": jnp.squeeze(param_tree['mlp/~/linear_1']['w']), 
-        "b": jnp.squeeze(param_tree['mlp/~/linear_0']['w']), 
-        "c": jnp.squeeze(param_tree['mlp/~/linear_0']['b']), 
-        "d": jnp.squeeze(param_tree['mlp/~/linear_1']['b'])
-    }
-
 
 def main(args):
     rngseed = args.rngseed
@@ -165,8 +124,10 @@ def main(args):
         prank = bound(0.1, param)
         prank_rec.append(prank)
 
+    for key, val in posterior_samples.items():
+        print(key, val.shape)
         
-    fig = plt.figure(constrained_layout=True, figsize=(10, 5))
+    fig = plt.figure(constrained_layout=True, figsize=(8, 8))
 
     # Define the grid
     gs = gridspec.GridSpec(4, 4, figure=fig)
@@ -176,7 +137,7 @@ def main(args):
     print(prank_freqs)
     bar_plot(prank_freqs, ax=ax)
     ax.set_xlabel("p-rank")
-    ax.set_title("posterior samples")
+    ax.set_title("posterior samples pranks")
 
     ax = fig.add_subplot(gs[:2, 2:])
     prior_prank_freq_dict = prior_prank_freq(
@@ -187,15 +148,21 @@ def main(args):
     )
     bar_plot(prior_prank_freq_dict, ax=ax)
     ax.set_xlabel("p-rank")
-    ax.set_title("prior samples")
+    ax.set_title("prior samples pranks")
 
     # plot true function and data.
-    ax = fig.add_subplot(gs[2:, 1:3])
+    ax = fig.add_subplot(gs[2:, :2])
     x = np.linspace(XMIN, XMAX).reshape(-1, 1)
     ax.plot(x, forward.apply(true_param, None, x), "r--")
     ax.plot(X, Y, "kx")
     true_prank = bound(args.prank_eps, param_tree_to_dict(true_param))
-    ax.set_title(f"prank={true_prank}")
+    ax.set_title(f"True network and data. prank={true_prank}")
+
+    ax = fig.add_subplot(gs[2:, 2:])
+    ax.plot(posterior_samples["b"], posterior_samples["c"], "k.", alpha=0.5)
+    ax.set_title("In-weights and biases")
+    ax.set_xlabel("b")
+    ax.set_ylabel("c")
 
     fig.suptitle(
         f"p-rank histogram: "
@@ -204,17 +171,20 @@ def main(args):
         f"obs $\sigma=${args.sigma_obs}, "
         f"$\epsilon=${args.prank_eps}, "
         f"layers={[args.input_dim] + args.layer_sizes}, "
-        f"num_mcmc={num_mcmc_samples} "
+        f"num_mcmc={num_mcmc_samples}, "
+        f"seed={args.rngseed}"
     )
 
     if args.output_dir is not None:
         os.makedirs(args.output_dir, exist_ok=True)
-        filename = f"prankmcmc_n{args.num_training_data}_sigmap{args.prior_std}_sigmaobs{args.sigma_obs}_h{num_hidden_nodes}.png"
+        filename = f"prankmcmc_n{args.num_training_data}_sigmap{args.prior_std}_sigmaobs{args.sigma_obs}_h{num_hidden_nodes}_seed{args.rngseed}.png"
         filepath = os.path.join(args.output_dir, filename)
         fig.savefig(filepath, bbox_inches="tight")
+        print(f"File saved by: {filepath}")
 
     if args.show_plot:
         plt.show()
+    
     return
 
 

@@ -14,6 +14,15 @@ import time
 import logging
 from collections import namedtuple
 
+
+ACTIVATION_FUNC_SWITCH = {
+    "tanh": jax.nn.tanh,
+    "id": lambda x: x,
+    "relu": jax.nn.relu,
+    "gelu": jax.nn.gelu,
+    "swish": jax.nn.swish,
+}
+
 MCMCConfig = namedtuple(
     "MCMCConfig", ["num_posterior_samples", "num_warmup", "num_chains", "thinning"]
 )
