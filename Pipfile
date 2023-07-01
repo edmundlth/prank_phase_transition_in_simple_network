@@ -13,6 +13,7 @@ numpyro = "*"
 typing-extensions = "*"
 jupyter = "*"
 seaborn = "*"
+optax = "*"
 
 [dev-packages]
 black = "*"

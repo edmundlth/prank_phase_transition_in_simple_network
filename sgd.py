@@ -38,6 +38,7 @@ def minibatch_generator(X, Y, batch_size):
 
 def main(args):
     rngseed = args.rngseed
+    np.random.seed(args.rngseed + 5)
     rngkeyseq = hk.PRNGSequence(jax.random.PRNGKey(rngseed))
     true_param_array = None
     layer_sizes = args.layer_sizes
@@ -89,13 +90,19 @@ def main(args):
     ######################
     loss_fn = lambda params, x, y: optax.l2_loss(forward.apply(params, None, x), y).mean()
     loss_fn = jax.jit(loss_fn)
-    optimizer = optax.adam(0.001)
+    # optimizer = optax.adam(args.learning_rate)
+    optimizer = optax.sgd(args.learning_rate)
 
     params = jtree.tree_map(lambda x: jax.random.uniform(next(rngkeyseq), shape=x.shape), init_param)
     print(params)
     opt_state = optimizer.init(params)
     rec = []
-    snapshots = {t: None for t in range(args.num_epoch // 4, args.num_epoch, args.num_epoch // 4)}
+    num_snapshots = 5
+    snapshots = {
+        t: None 
+        for t in range(args.num_epoch // num_snapshots, args.num_epoch, args.num_epoch // num_snapshots)
+    }
+    batch_size = int(args.batch_size) if args.batch_size >= 1 else int(args.num_training_data * args.batch_size)
     for t in range(args.num_epoch):
         for X_batch, Y_batch in minibatch_generator(X, Y, batch_size=5):
             gradients = jax.grad(loss_fn)(params, X_batch, Y_batch)
@@ -117,12 +124,26 @@ def main(args):
                 "test_loss": test_loss
             }
     
-    fig = plt.figure(constrained_layout=True, figsize=(10, 5))
-    gs = gridspec.GridSpec(6, 6, figure=fig)
+    ######################
+    # Plots
+    ######################
+    fig = plt.figure(constrained_layout=True, figsize=(14, 7))
+    gs = gridspec.GridSpec(5, 5, figure=fig)
 
-    ax = fig.add_subplot(gs[2:, :4])
+    x = np.linspace(XMIN, XMAX).reshape(-1, 1)
+    for i, t in enumerate(sorted(snapshots.keys())):    
+        ax = fig.add_subplot(gs[:2, i:i + 1])
+        param_snapshot = snapshots[t]["params"]
+        ax.plot(x, forward.apply(true_param, None, x), "r--", alpha=0.5)
+        ax.plot(X, Y, "kx", alpha=0.3)
+        ax.plot(x, forward.apply(param_snapshot, None, x), "b--")
+        snapshot_prank = bound(args.prank_eps, param_tree_to_dict(param_snapshot))
+        ax.set_title(f"prank={snapshot_prank}")
+
+
+    ax = fig.add_subplot(gs[2:, :])
     rec = np.array(rec)
-    ax.plot(rec[:, 0], rec[:, 1], "kx--", label=f"prank_eps={args.prank_eps}")
+    ax.plot(rec[:, 0], rec[:, 1], "kx--", label=f"prank_eps={args.prank_eps}", )
     ax.plot(rec[:, 0], rec[:, 2], "rx--", label=f"prank_eps={args.prank_eps/2}")
     ax.legend()
 
@@ -130,18 +151,14 @@ def main(args):
     ax.plot(rec[:, 0], rec[:, 3], color="orange", alpha=0.8, label="train loss")
     ax.plot(rec[:, 0], rec[:, 4], color="skyblue", alpha=0.8, label="test loss")
     ax.legend()
+    ymin, ymax = ax.get_ylim()
+    ax.vlines(sorted(snapshots.keys()), ymin=ymin, ymax=ymax)
 
-    # for i in sorted(snapshots.keys()):
-    ax = fig.add_subplot(gs[:2, :2])
-    x = np.linspace(XMIN, XMAX).reshape(-1, 1)
-    ax.plot(x, forward.apply(true_param, None, x), "r--")
-    ax.plot(X, Y, "kx")
     true_prank = bound(args.prank_eps, param_tree_to_dict(true_param))
-    ax.set_title(f"True network and data. prank={true_prank}")
-
     fig.suptitle(
         f"p-rank histogram: "
         f"$n=${args.num_training_data}, "
+        f"true prank={true_prank}, "
         f"prior $\sigma$={args.prior_std}, "
         f"obs $\sigma=${args.sigma_obs}, "
         f"$\epsilon=${args.prank_eps}, "
@@ -183,6 +200,7 @@ if __name__ == "__main__":
         help="Epsilon to be used in the p-rank algorithm",
     )
     parser.add_argument("--num_training_data", nargs="?", default=132, type=int)
+    parser.add_argument("--batch_size", nargs="?", default=0.1, type=float)
     parser.add_argument("--sigma_obs", nargs="?", default=1.0, type=float)
     parser.add_argument("--prior_std", nargs="?", default=10.0, type=float)
     parser.add_argument("--prior_mean", nargs="?", default=0.0, type=float)
@@ -213,6 +231,7 @@ if __name__ == "__main__":
     
     parser.add_argument("--rngseed", nargs="?", default=42, type=int)
     parser.add_argument("--activation_fn_name", nargs="?", default="tanh", type=str)
+    parser.add_argument("--learning_rate", nargs="?", default=0.001, type=float)
     
     args = parser.parse_args()
 
