@@ -28,12 +28,14 @@ usage: mcmc.py [-h] [--output_dir OUTPUT_DIR]
   - [x] Use bar charts instead of histogram?
   - [x] As sanity check also plot the prank frequency of samples from prior to compare. 
   - [ ] tSNE using metric derived from canonicalize.py.
-  - [ ] Visualise random samples as point cloud. 
+  - [ ] Visualise parameters as point cloud and indicate merging or dropping of nodes by drawing lines between them and the axes. 
   - [ ] Run for a range of `n` and for different `rngseed`.
   - [ ] Plot changes in p-rank frequency in `n`. 
   - [ ] Run experiments with true network with smaller rank.
   - [ ] Run experiments with true network with larger rank.
   - [ ] Run SGD and track p-rank over time. 
   - [ ] Run ensemble of SGD and plot p-rank frequencies. 
+  - [ ] Think of some way to quantify the difference between SGD initialised near origin vs far away from origin. There should be more "highly singular" regions near the origin for SGD to escape compare to initialising far away where we expect the trajectory to be attached to one "component" of the minimal loss level set that is far away from other components. 
+  - [ ] Run SGLD local RLCT estimation tool and see if prank and lambda hat correlate. 
   
 

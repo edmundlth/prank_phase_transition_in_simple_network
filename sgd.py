@@ -89,11 +89,29 @@ def main(args):
     # Run SGD
     ######################
     loss_fn = lambda params, x, y: optax.l2_loss(forward.apply(params, None, x), y).mean()
+    # loss_fn = lambda params, x, y: optax.huber_loss(forward.apply(params, None, x), y).mean()
     loss_fn = jax.jit(loss_fn)
-    # optimizer = optax.adam(args.learning_rate)
-    optimizer = optax.sgd(args.learning_rate)
+    if args.optim_name.lower() == "sgd":
+        optimizer = optax.sgd(args.learning_rate)
+    elif args.optim_name.lower() == "adam":
+        optimizer = optax.adam(args.learning_rate)
+        # init_value = args.learning_rate
+        # decay_steps = 1000
+        # def schedule_fn(step):
+        #     lr = init_value * 0.5 * (1 + jnp.cos(jnp.pi * (step % decay_steps) / decay_steps))
+        #     return lr
 
-    params = jtree.tree_map(lambda x: jax.random.uniform(next(rngkeyseq), shape=x.shape), init_param)
+        # optimizer = optax.chain(
+        #     optax.adam(args.learning_rate), 
+        #     optax.scale_by_schedule(schedule_fn)
+        # )
+    else:
+        raise NotImplementedError(f"{args.optim_name} not implemented")
+
+    params = jtree.tree_map(
+        lambda x: jax.random.uniform(next(rngkeyseq), shape=x.shape, minval=-10.0, maxval=10.0), 
+        init_param
+    )
     print(params)
     opt_state = optimizer.init(params)
     rec = []
@@ -104,16 +122,18 @@ def main(args):
     }
     batch_size = int(args.batch_size) if args.batch_size >= 1 else int(args.num_training_data * args.batch_size)
     for t in range(args.num_epoch):
-        for X_batch, Y_batch in minibatch_generator(X, Y, batch_size=5):
+        for X_batch, Y_batch in minibatch_generator(X, Y, batch_size=batch_size):
             gradients = jax.grad(loss_fn)(params, X_batch, Y_batch)
             updates, opt_state = optimizer.update(gradients, opt_state)
             params = optax.apply_updates(params, updates)
         prank = bound(args.prank_eps, param_tree_to_dict(params))
         prank_small = bound(args.prank_eps / 2, param_tree_to_dict(params))
+        prank_large = bound(args.prank_eps * 2, param_tree_to_dict(params))
         train_loss = loss_fn(params, X, Y)
         test_loss = loss_fn(params, X_test, Y_test)
-        print(f"Epoch {t}: prank={prank:2d}, {prank_small:2d}, train loss:{train_loss:.4f}, test loss:{test_loss:.4f}")
-        rec.append((t, prank, prank_small, train_loss, test_loss))
+        # steps = opt_state[0][0].count
+        print(f"Epoch {t:4d}: prank={prank_large: 2d}, {prank:2d}, {prank_small:2d}, train:{train_loss:.4f}, test:{test_loss:.4f}")
+        rec.append((t, prank, prank_small, prank_large, train_loss, test_loss))
 
         if t in snapshots:
             snapshots[t] = {
@@ -142,17 +162,20 @@ def main(args):
 
 
     ax = fig.add_subplot(gs[2:, :])
-    rec = np.array(rec)
-    ax.plot(rec[:, 0], rec[:, 1], "kx--", label=f"prank_eps={args.prank_eps}", )
-    ax.plot(rec[:, 0], rec[:, 2], "rx--", label=f"prank_eps={args.prank_eps/2}")
+    rec = np.array(rec)[args.num_epoch // 20:]
+    ax.plot(rec[:, 0], rec[:, 1], "kx--", label=f"prank_eps={args.prank_eps}", alpha=0.5, markersize=3)
+    ax.plot(rec[:, 0], rec[:, 2], "rx--", label=f"prank_eps={args.prank_eps / 2}", alpha=0.5, markersize=3)
+    ax.plot(rec[:, 0], rec[:, 3], "bx--", label=f"prank_eps={args.prank_eps * 2}", alpha=0.5, markersize=3)
     ax.legend()
+    
 
     ax = ax.twinx()
-    ax.plot(rec[:, 0], rec[:, 3], color="orange", alpha=0.8, label="train loss")
-    ax.plot(rec[:, 0], rec[:, 4], color="skyblue", alpha=0.8, label="test loss")
+    ax.plot(rec[:, 0], rec[:, 4], color="orange", alpha=0.8, label="train loss")
+    ax.plot(rec[:, 0], rec[:, 5], color="skyblue", alpha=0.8, label="test loss")
     ax.legend()
     ymin, ymax = ax.get_ylim()
     ax.vlines(sorted(snapshots.keys()), ymin=ymin, ymax=ymax)
+    ax.set_yscale('log')
 
     true_prank = bound(args.prank_eps, param_tree_to_dict(true_param))
     fig.suptitle(
@@ -164,13 +187,27 @@ def main(args):
         f"$\epsilon=${args.prank_eps}, "
         f"layers={[args.input_dim] + args.layer_sizes}, "
         f"num_epoch={args.num_epoch}, "
+        f"batch size={args.batch_size}, "
+        f"optim={args.optim_name}, "
+        f"lr={args.learning_rate}, "
         f"seed={args.rngseed}"
     )
 
     
     if args.output_dir is not None:
         os.makedirs(args.output_dir, exist_ok=True)
-        filename = f"pranksgd_n{args.num_training_data}_sigmap{args.prior_std}_sigmaobs{args.sigma_obs}_h{args.layer_sizes[0]}_seed{args.rngseed}.png"
+        filename = (
+            f"pranksgd_n{args.num_training_data}_"
+            f"sigmap{args.prior_std}_"
+            f"sigmaobs{args.sigma_obs}_"
+            f"h{args.layer_sizes[0]}_"
+            f"tprank{true_prank}_"
+            f"nepoch{args.num_epoch}_"
+            f"batch{args.batch_size}_"
+            f"optim{args.optim_name}_"
+            f"lr{args.learning_rate}_"
+            f"seed{args.rngseed}.png"
+        )
         filepath = os.path.join(args.output_dir, filename)
         fig.savefig(filepath, bbox_inches="tight")
         print(f"File saved by: {filepath}")
@@ -231,6 +268,7 @@ if __name__ == "__main__":
     
     parser.add_argument("--rngseed", nargs="?", default=42, type=int)
     parser.add_argument("--activation_fn_name", nargs="?", default="tanh", type=str)
+    parser.add_argument("--optim_name", nargs="?", default="sgd", type=str, help="sgd | adam")
     parser.add_argument("--learning_rate", nargs="?", default=0.001, type=float)
     
     args = parser.parse_args()
